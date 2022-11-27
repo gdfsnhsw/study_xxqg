@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/guonaihong/gout"
-	"github.com/mxschmitt/playwright-go"
+	"github.com/playwright-community/playwright-go"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/johlanse/study_xxqg/model"
+	"github.com/johlanse/study_xxqg/utils"
 )
 
 var (
@@ -73,11 +73,12 @@ func getLinks(model string) ([]Link, error) {
 		resp []byte
 	)
 
-	err := gout.GET(learnUrl + "?_st=" + strconv.Itoa(UID)).BindBody(&resp).Do()
+	response, err := utils.GetClient().R().SetQueryParam("_st", strconv.Itoa(UID)).Get(learnUrl)
 	if err != nil {
-		log.Errorln("请求连接列表出现错误" + err.Error())
+		log.Errorln("请求链接列表出现错误！" + err.Error())
 		return nil, err
 	}
+	resp = response.Bytes()
 
 	var links []Link
 	err = json.Unmarshal(resp, &links)
@@ -115,13 +116,18 @@ func (c *Core) LearnArticle(user *model.User) {
 	if score.Content["article"].CurrentScore < score.Content["article"].MaxScore {
 		log.Infoln("开始加载文章学习模块")
 
-		context, err := c.browser.NewContext()
+		context, err := c.browser.NewContext(playwright.BrowserNewContextOptions{
+			Viewport: &playwright.BrowserNewContextOptionsViewport{
+				Width:  playwright.Int(1920),
+				Height: playwright.Int(1080),
+			}})
 		_ = context.AddInitScript(playwright.BrowserContextAddInitScriptOptions{
 			Script: playwright.String("Object.defineProperties(navigator, {webdriver:{get:()=>undefined}});")})
 		if err != nil {
 			log.Errorln("创建实例对象错误" + err.Error())
 			return
 		}
+
 		defer func(context playwright.BrowserContext) {
 			err := context.Close()
 			if err != nil {
@@ -134,7 +140,11 @@ func (c *Core) LearnArticle(user *model.User) {
 			return
 		}
 		defer func() {
-			page.Close()
+			err := page.Close()
+			if err != nil {
+				log.Errorln("关闭页面失败")
+				return
+			}
 		}()
 
 		err = context.AddCookies(user.ToBrowserCookies()...)
@@ -158,7 +168,7 @@ func (c *Core) LearnArticle(user *model.User) {
 					log.Errorln("页面跳转失败")
 				}
 				log.Infoln("正在学习文章：" + links[n].Title)
-				c.Push("text", "正在学习文章："+links[n].Title)
+				c.Push(user.PushId, "text", "正在学习文章："+links[n].Title)
 				log.Infoln("文章发布时间：" + links[n].PublishTime)
 				log.Infoln("文章学习链接：" + links[n].Url)
 				learnTime := 60 + rand.Intn(15) + 3
@@ -224,7 +234,11 @@ func (c *Core) LearnVideo(user *model.User) {
 		// core := Core{}
 		// core.Init()
 
-		context, err := c.browser.NewContext()
+		context, err := c.browser.NewContext(playwright.BrowserNewContextOptions{
+			Viewport: &playwright.BrowserNewContextOptionsViewport{
+				Width:  playwright.Int(1920),
+				Height: playwright.Int(1080),
+			}})
 		_ = context.AddInitScript(playwright.BrowserContextAddInitScriptOptions{
 			Script: playwright.String("Object.defineProperties(navigator, {webdriver:{get:()=>undefined}});")})
 		if err != nil {
@@ -265,10 +279,10 @@ func (c *Core) LearnVideo(user *model.User) {
 					log.Errorln("页面跳转失败")
 				}
 				log.Infoln("正在观看视频：" + links[n].Title)
-				c.Push("text", "正在观看视频："+links[n].Title)
+				c.Push(user.PushId, "text", "正在观看视频："+links[n].Title)
 				log.Infoln("视频发布时间：" + links[n].PublishTime)
 				log.Infoln("视频学习链接：" + links[n].Url)
-				learnTime := 60 + rand.Intn(10) + 5
+				learnTime := 60 + rand.Intn(10)
 				for i := 0; i < learnTime; i++ {
 					if c.IsQuit() {
 						return

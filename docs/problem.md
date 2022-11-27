@@ -1,10 +1,40 @@
 ## 常见问题<!-- {docsify-ignore} -->
 
+
++ ### 遇到问题的常用解决办法
+
+```yaml
+首先将日志项中的日志等级调整为debug
+    
+复现出现的错误，在issue中查找错误日志的关键字
+
+通过搜索引擎查找问题
+    
+在群聊中查找聊天记录，查找置顶信息
+
+若无解决方案，可附上关键日志和相关配置文件，在群聊中提出问题或者在github提出issue
+```
+
 + ### windows打开**study_xxqg.exe**出现直接闪退
 ```yaml
   在文件路径栏输入**cmd**,然后再黑色命令窗口中输入```./study_xxqg.exe```,
   然后查看报错内容截图并在[github](https://github.com/johlanse/study_xxqg/issues) 提交issue
 ```
+
++ ### web端账号密码
+```yaml
+  web端账号密码默认都是admin，不是你学习强国的手机号，需要修改可自行修改配置文件
+```
+
++ ### 关于cookie的时间问题
+```yaml
+原理是是通过带上当前cookie访问一个api即可，在1.0.35版本之后我通过cron定时执行保活，默认的cron是 0 */1 * * *
+
+目前暂不知道能够续期的次数
+
+如果你想让访问间隔时间更短或者更长，可以通过添加环境变量 CHECK_ENV 为cron值
+```
+
 
 + ### windows下出现找不到浏览器的问题
 
@@ -22,9 +52,9 @@
   
   apt-get install chromium
  
-  ln -s /usr/bin/chromium ~/.cache/ms-playwright/chromium-907428/chrome-linux/chrome
+  ln -s /usr/bin/chromium ./tools/browser/chromium-978106/chrome-linux/chrome
  
-  ln -s /usr/bin/node ~/.cache/ms-playwright-go/1.14.0/node
+  ln -s /usr/bin/node ./tools/driver/ms-playwright-go/1.20.0-beta-1647057403000/node
 ```
 
 
@@ -62,30 +92,16 @@ study_xxqg进程会在运行的时候将pid输出到目录下的pid.pid文件，
   Missing libraries are:
       libgtk-3.so.0
       libgdk-3.so.0
-      libX11-xcb.so.1
-      libXcomposite.so.1
-      libXcursor.so.1
-      libXdamage.so.1
-      libXfixes.so.3
-      libXi.so.6
-      libXrender.so.1
-      libpangocairo-1.0.so.0
-      libpango-1.0.so.0
-      libharfbuzz.so.0
-      libatk-1.0.so.0
-      libcairo-gobject.so.2
-      libcairo.so.2
-      libgdk_pixbuf-2.0.so.0
-      libdbus-glib-1.so.2
-      libxcb-shm.so.0
-      libpangoft2-1.0.so.0
-      libXt.so.6
+
+```
+```shell
+sudo ./tools/driver/ms-playwright-go/1.20.0-beta-1647057403000/playwright.sh install-deps
 
 ```
 
-~~在debian11的系统上解决方式为：~~
+> 若运行后显示未找到apt-get，可百度对应系统安装apt-get的方法
 
-使用docker可以快速解决
+
 
 
 + ### 为什么运行了就卡住了

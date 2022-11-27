@@ -3,20 +3,15 @@
 package model
 
 import (
-	"database/sql"
-	"fmt"
-	"math/rand"
 	"net/http"
+	"os"
 	"time"
 
-	"github.com/guonaihong/gout"
-	"github.com/imroc/req/v3"
-	"github.com/mxschmitt/playwright-go"
+	"github.com/playwright-community/playwright-go"
+	"github.com/robfig/cron/v3"
 	log "github.com/sirupsen/logrus"
-	"github.com/tidwall/gjson"
 
-	"github.com/johlanse/study_xxqg/conf"
-	"github.com/johlanse/study_xxqg/push"
+	"github.com/johlanse/study_xxqg/utils"
 )
 
 func init() {
@@ -24,98 +19,92 @@ func init() {
 }
 
 var (
-	wechatPush func(id, message string)
+	pushFunc func(id, kind, message string)
 )
 
-func SetPush(push func(id, message string)) {
-	wechatPush = push
-}
-
-// User
-/**
- * @Description:
- */
-type User struct {
-	Nick      string `json:"nick"`
-	UID       string `json:"uid"`
-	Token     string `json:"token"`
-	LoginTime int64  `json:"login_time"`
-	PushId    string `json:"push_id"`
+func SetPush(push func(id, kind, message string)) {
+	pushFunc = push
 }
 
 // Query
 /**
- * @Description:
+ * @Description: 查询所有未掉线的用户
  * @return []*User
  * @return error
  */
 func Query() ([]*User, error) {
-	var users []*User
-	ping()
-	results, err := db.Query("select * from user")
+	var (
+		users  []*User
+		result []*User
+	)
+	_ = engine.Ping()
+	err := engine.Where("status=?", 1).Find(&users)
 	if err != nil {
-		return nil, err
+		return users, err
 	}
-	defer func(results *sql.Rows) {
-		err := results.Close()
-		if err != nil {
-			log.Errorln("关闭results失败" + err.Error())
-		}
-	}(results)
-	for results.Next() {
-		u := new(User)
-		err := results.Scan(&u.Nick, &u.UID, &u.Token, &u.LoginTime, &u.PushId)
-		if err != nil {
-			return nil, err
-		}
-		if CheckUserCookie(u) {
-			users = append(users, u)
+
+	for _, user := range users {
+		if ok, _ := utils.CheckUserCookie(user.ToCookies()); ok {
+			result = append(result, user)
 		} else {
-			log.Infoln("用户" + u.Nick + "cookie已失效")
-			_ = push.PushMessage("", "用户"+u.UID+"已失效，请登录", "login", u.PushId)
-			if conf.GetConfig().Wechat.PushLoginWarn {
-				wechatPush(u.PushId, fmt.Sprintf("用户%v已失效！！", u.Nick))
+			log.Warningln(user.Nick + "的cookie已失效")
+			changeStatus(user.Uid, 0)
+			if pushFunc != nil {
+				pushFunc(user.PushId, "flush", user.Nick+"的cookie已失效")
 			}
-			_ = DeleteUser(u.UID)
 		}
+	}
+	return result, err
+}
+
+func changeStatus(uid string, status int) {
+	_ = engine.Ping()
+	_, err := engine.Table(new(User)).Where("uid=?", uid).Update(map[string]any{"status": status})
+	if err != nil {
+		log.Errorln("改变status失败" + err.Error())
+		return
+	}
+}
+
+func QueryFailUser() ([]*User, error) {
+	var users []*User
+	_ = engine.Ping()
+	err := engine.Where("status=?", 0).Find(&users)
+	if err != nil {
+		return users, err
 	}
 	return users, err
 }
 
 // QueryByPushID
 /**
- * @Description:
+ * @Description: 根据推送平台的key查询用户
  * @return []*User
  * @return error
  */
 func QueryByPushID(pushID string) ([]*User, error) {
-	var users []*User
-	ping()
-	results, err := db.Query("select * from user where push_id = ?", pushID)
+	var (
+		users  []*User
+		result []*User
+	)
+	_ = engine.Ping()
+	err := engine.Where("status=? and push_id=?", 1, pushID).Find(&users)
 	if err != nil {
 		return users, err
 	}
-	defer func(results *sql.Rows) {
-		err := results.Close()
-		if err != nil {
-			log.Errorln("关闭results失败" + err.Error())
-		}
-	}(results)
-	for results.Next() {
-		u := new(User)
-		err := results.Scan(&u.Nick, &u.UID, &u.Token, &u.LoginTime, &u.PushId)
-		if err != nil {
-			return users, err
-		}
-		if CheckUserCookie(u) {
-			users = append(users, u)
+
+	for _, user := range users {
+		if ok, _ := utils.CheckUserCookie(user.ToCookies()); ok {
+			result = append(result, user)
 		} else {
-			log.Infoln("用户" + u.Nick + "cookie已失效")
-			_ = push.PushMessage("", "用户"+u.UID+"已失效，请登录", "login", u.PushId)
-			_ = DeleteUser(u.UID)
+			log.Warningln(user.Nick + "的cookie已失效")
+			changeStatus(user.Uid, 0)
+			if pushFunc != nil {
+				pushFunc(user.PushId, "flush", user.Nick+"的cookie已失效")
+			}
 		}
 	}
-	return users, err
+	return result, err
 }
 
 // Find
@@ -126,7 +115,7 @@ func QueryByPushID(pushID string) ([]*User, error) {
  */
 func Find(uid string) *User {
 	u := new(User)
-	err := db.QueryRow("select * from user where uid=?;", uid).Scan(&u.Nick, &u.UID, &u.Token, &u.LoginTime, &u.PushId)
+	_, err := engine.Where("uid=?", uid).Get(u)
 	if err != nil {
 		return nil
 	}
@@ -140,20 +129,20 @@ func Find(uid string) *User {
  * @return error
  */
 func AddUser(user *User) error {
-	ping()
-	count := UserCount(user.UID)
+	_ = engine.Ping()
+	count, _ := engine.Where("uid=?", user.Uid).Count(new(User))
 	if count < 1 {
-		_, err := db.Exec("insert into user (nick, uid, token, login_time,push_id) values (?,?,?,?,?)", user.Nick, user.UID, user.Token, user.LoginTime, user.PushId)
+		user.Status = 1
+		_, err := engine.InsertOne(user)
 		if err != nil {
-			log.Errorln("数据库插入失败")
-			log.Errorln(err.Error())
 			return err
 		}
-		return err
-	}
-	err := UpdateUser(user)
-	if err != nil {
-		return err
+	} else {
+		user.Status = 1
+		err := UpdateUser(user)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -165,30 +154,11 @@ func AddUser(user *User) error {
  * @return error
  */
 func UpdateUser(user *User) error {
-	ping()
-	_, err := db.Exec("update user set token=?,login_time=?,push_id=? where uid = ?", user.Token, user.LoginTime, user.PushId, user.UID)
+	_, err := engine.Where("uid=?", user.Uid).Update(user)
 	if err != nil {
-		log.Errorln("更新数据失败")
-		log.Errorln(err.Error())
 		return err
 	}
-	return err
-}
-
-// UserCount
-/**
- * @Description:
- * @param uid
- * @return int
- */
-func UserCount(uid string) int {
-	ping()
-	var count int
-	err := db.QueryRow("select count(*) from user where uid = ?", uid).Scan(&count)
-	if err != nil {
-		return 0
-	}
-	return count
+	return nil
 }
 
 // DeleteUser
@@ -197,8 +167,8 @@ func UserCount(uid string) int {
  * @return error
  */
 func DeleteUser(uid string) error {
-	ping()
-	_, err := db.Exec("delete from user where uid = ?;", uid)
+	_ = engine.Ping()
+	_, err := engine.Where("uid=?", uid).Delete(new(User))
 	if err != nil {
 		return err
 	}
@@ -239,40 +209,18 @@ func TokenToCookies(token string) []*http.Cookie {
 	return []*http.Cookie{cookie}
 }
 
-func (u *User) ToBrowserCookies() []playwright.SetNetworkCookieParam {
-	cookie := playwright.SetNetworkCookieParam{
-		Name:     "token",
-		Value:    u.Token,
+func (u *User) ToBrowserCookies() []playwright.BrowserContextAddCookiesOptionsCookies {
+	cookie := playwright.BrowserContextAddCookiesOptionsCookies{
+		Name:     playwright.String("token"),
+		Value:    playwright.String(u.Token),
 		Path:     playwright.String("/"),
 		Domain:   playwright.String(".xuexi.cn"),
-		Expires:  playwright.Int(int(time.Now().Add(time.Hour * 12).UnixNano())),
+		Expires:  playwright.Float(float64(time.Now().Add(time.Hour * 12).Unix())),
 		Secure:   playwright.Bool(false),
 		HttpOnly: playwright.Bool(false),
-		SameSite: playwright.String("Strict"),
+		SameSite: playwright.SameSiteAttributeStrict,
 	}
-	return []playwright.SetNetworkCookieParam{cookie}
-}
-
-// CheckUserCookie
-/**
- * @Description: 获取用户成绩
- * @param user
- * @return bool
- */
-func CheckUserCookie(user *User) bool {
-	var resp []byte
-	err := gout.GET("https://pc-api.xuexi.cn/open/api/score/get").SetCookies(user.ToCookies()...).SetHeader(gout.H{
-		"Cache-Control": "no-cache",
-	}).BindBody(&resp).Do()
-	if err != nil {
-		log.Errorln("获取用户总分错误" + err.Error())
-
-		return false
-	}
-	if !gjson.GetBytes(resp, "ok").Bool() {
-		return false
-	}
-	return true
+	return []playwright.BrowserContextAddCookiesOptionsCookies{cookie}
 }
 
 func check() {
@@ -282,21 +230,33 @@ func check() {
 			log.Errorf("%v 出现错误，%v", "auth check", err)
 		}
 	}()
-	for {
+	c := cron.New()
+	cr := "0 */1 * * *"
+	if crEnv, ok := os.LookupEnv("CHECK_ENV"); ok {
+		cr = crEnv
+		log.Infoln("已成功自定义保活cron : " + cr)
+	}
+	_, err := c.AddFunc(cr, func() {
+		log.Infoln("开始执行保活任务")
 		users, _ := Query()
 		for _, user := range users {
-			response, _ := req.R().SetCookies(user.ToCookies()...).Get("https://pc-api.xuexi.cn/open/api/auth/check")
+			response, _ := utils.GetClient().R().SetCookies(user.ToCookies()...).Get("https://pc-api.xuexi.cn/open/api/auth/check")
 			token := ""
 			for _, cookie := range response.Cookies() {
 				if cookie.Name == "token" {
 					token = cookie.Value
 				}
 			}
-			if token != "" {
+			if token != "" && user.Token != token {
 				user.Token = token
 				_ = UpdateUser(user)
+				log.Infoln("用户" + user.Nick + "的ck已成功保活cookie")
 			}
 		}
-		time.Sleep(time.Hour * time.Duration(rand.Intn(2)))
+	})
+	if err != nil {
+		log.Errorln("添加保活任务失败" + err.Error())
+		return
 	}
+	c.Start()
 }

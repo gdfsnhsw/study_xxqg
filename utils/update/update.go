@@ -17,35 +17,43 @@ import (
 	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+
+	"github.com/johlanse/study_xxqg/conf"
 )
 
 // CheckUpdate 检查更新
-func CheckUpdate(version string) {
+func CheckUpdate(version string) string {
 	log.Infof("正在检查更新.")
 	if version == "(devel)" {
 		log.Warnf("检查更新失败: 使用的 Actions 测试版或自编译版本.")
-		return
+		return ""
 	}
 	if version == "unknown" {
 		log.Warnf("检查更新失败: 使用的未知版本.")
-		return
+		return ""
 	}
 
 	if !strings.HasPrefix(version, "v") {
 		log.Warnf("版本格式错误")
-		return
+		return ""
 	}
 	latest, err := lastVersion()
 	if err != nil {
 		log.Warnf("检查更新失败: %v", err)
-		return
+		return ""
+	}
+	if strings.Contains(latest, "must") {
+		log.Infoln("检测到强制更新，开始强制更新")
+		SelfUpdate("", version)
+		return ""
 	}
 	if versionCompare(version, latest) {
 		log.Infof("当前有更新的 study_xxqg 可供更新, 请前往 https://github.com/johlanse/study_xxqg/releases 下载.")
 		log.Infof("当前版本: %v 最新版本: %v", version, latest)
-		return
+		return "检测到可用更新，版本号：" + latest
 	}
 	log.Infof("检查更新完成. 当前已运行最新版本.")
+	return ""
 }
 
 func readLine() (str string) {
@@ -73,6 +81,9 @@ func lastVersion() (string, error) {
 //  @return bool
 //
 func versionCompare(nowVersion, lastVersion string) bool {
+	nowVersion = strings.ReplaceAll(nowVersion, "must", "beta")
+	lastVersion = strings.ReplaceAll(lastVersion, "must", "beta")
+
 	NowBeta := strings.Contains(nowVersion, "beta")
 	LastBeta := strings.Contains(lastVersion, "beta")
 
@@ -85,6 +96,13 @@ func versionCompare(nowVersion, lastVersion string) bool {
 
 	if nowMainIntVersion < lastMainIntVersion {
 		return true
+	}
+	if strings.Contains(nowVersion, "SNAPSHOT") {
+		if nowMainIntVersion == lastMainIntVersion {
+			return false
+		} else {
+			return true
+		}
 	}
 	// 如果最新版本是beta
 	if LastBeta {
@@ -148,8 +166,14 @@ func wait() {
 
 // SelfUpdate 自更新
 func SelfUpdate(github string, version string) {
+	github = conf.GetConfig().GithubProxy
 	if github == "" {
 		github = "https://github.com"
+	}
+
+	if version == "unknown" {
+		log.Warningln("测试版本，不更新！")
+		return
 	}
 
 	log.Infof("正在检查更新.")

@@ -1,4 +1,5 @@
 import axios, {AxiosInstance, AxiosRequestConfig} from "axios";
+import {useNavigate} from "react-router-dom";
 
 type TAxiosOption = {
     baseURL: string;
@@ -19,11 +20,20 @@ class Http {
             (value)=>{
                if (value.headers !== null){
                    // @ts-ignore
-                   value.headers.xxqg_token = localStorage.getItem("xxqg_token")
+                   value.headers.Authorization = "Bearer "+localStorage.getItem("xxqg_token")
                }
                return value
         },()=>{
-
+                console.log("请求异常")
+        })
+        this.service.interceptors.response.use((value)=>{
+            console.log(value.data)
+            return value
+        },(error)=>{
+            console.log(error.message)
+            if (error.message === "Request failed with status code 401"){
+                window.location.hash = "/login"
+            }
         })
     }
 

@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/guonaihong/gout"
+	log "github.com/sirupsen/logrus"
+
+	"github.com/johlanse/study_xxqg/utils"
 )
 
 type Ding struct {
@@ -15,14 +18,19 @@ type Ding struct {
 	Token  string `json:"token"`
 }
 
-func (d *Ding) Send() func(kind string, message string) {
+func (d *Ding) Send() func(id string, kind string, message string) {
 	s := TypeSecret{Secret: d.Secret, Webhook: d.Token}
-	return func(kind string, message string) {
-		if kind == "markdown" {
+	return func(id string, kind string, message string) {
+		if kind == "flush" {
+
+			if strings.Contains(message, "login.xuexi.cn") {
+				message = fmt.Sprintf("[点我登录](%v)", message)
+			}
+
 			err := s.SendMessage(map[string]interface{}{
 				"msgtype": "markdown",
 				"markdown": map[string]string{
-					"title": "学习强国登录",
+					"title": "study_xxqg信息推送",
 					"text":  message,
 				},
 			})
@@ -30,9 +38,11 @@ func (d *Ding) Send() func(kind string, message string) {
 				return
 			}
 		} else {
-			err := s.SendMessage(Text(message))
-			if err != nil {
-				return
+			if log.GetLevel() == log.DebugLevel {
+				err := s.SendMessage(Text(message))
+				if err != nil {
+					return
+				}
 			}
 		}
 	}
@@ -76,8 +86,11 @@ func MarkDown(title, text string, ats ...string) map[string]interface{} {
 // SendMessage Function to send message
 //goland:noinspection GoUnhandledErrorResult
 func (t *TypeSecret) SendMessage(data map[string]interface{}) error {
-	gout.POST(t.getURL()).SetJSON(data).Do()
-	return nil
+	_, err := utils.GetClient().R().SetBodyJsonMarshal(data).Post(t.getURL())
+	if err != nil {
+		log.Errorln(err.Error())
+	}
+	return err
 }
 
 func (t *TypeSecret) hmacSha256(stringToSign string, secret string) string {

@@ -24,9 +24,12 @@ export async function checkToken() {
         return false
     }
     let responseData = await http.post(base + "/auth/check/"+token);
-    return responseData.data.success;
+    return responseData.data;
 
 }
+
+
+
 
 export async function login(data) {
     let responseData = await http.post(base+"/auth/login",data);
@@ -46,16 +49,54 @@ export async function checkQrCode(code) {
     return resp.data
 }
 
+export async function getAbout(){
+    let resp = await http.get(base+"/about");
+    return resp.data;
+}
+
 export async function getToken(code,sign){
-    let resp = await http.post(base+"/user/",{
+    let token = window.localStorage.getItem("xxqg_token")
+    let resp = await http.post(base+"/user?register_id="+token,{
         "code":code,
         "state":sign
     });
     return resp.data;
 }
 
+export async function deleteUser(uid){
+    let resp = await http.delete(base+"/user?uid="+uid);
+    return resp.data;
+}
+
 export async function getUsers(){
-    let resp = await http.get(base+"/user/");
+    let resp = await http.get(base+"/user");
+    return resp.data
+}
+
+export async function getConfig() {
+    let resp = await http.get(base+"/config/file");
+    return resp.data;
+}
+
+export async function restart() {
+    let resp = await http.post(base+"/restart");
+    return resp.data;
+}
+
+export async function update() {
+    let resp = await http.post(base+"/update");
+    return resp.data;
+}
+
+export async function saveConfig(data) {
+    let resp = await http.post(base+"/config/file",{
+        "data":data
+    });
+    return resp.data;
+}
+
+export async function getExpiredUsers(){
+    let resp = await http.get(base+"/user/expired");
     return resp.data
 }
 

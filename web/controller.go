@@ -3,12 +3,11 @@
 package web
 
 import (
+	"database/sql"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,13 +15,10 @@ import (
 
 	"github.com/johlanse/study_xxqg/conf"
 	"github.com/johlanse/study_xxqg/lib"
+	"github.com/johlanse/study_xxqg/lib/state"
 	"github.com/johlanse/study_xxqg/model"
 	"github.com/johlanse/study_xxqg/push"
 	"github.com/johlanse/study_xxqg/utils"
-)
-
-var (
-	state = sync.Map{}
 )
 
 // checkToken
@@ -38,7 +34,15 @@ func checkToken() gin.HandlerFunc {
 			ctx.JSON(200, Resp{
 				Code:    200,
 				Message: "",
-				Data:    nil,
+				Data:    1,
+				Success: true,
+				Error:   "",
+			})
+		} else if checkCommonUser(token) {
+			ctx.JSON(200, Resp{
+				Code:    200,
+				Message: "",
+				Data:    2,
 				Success: true,
 				Error:   "",
 			})
@@ -46,7 +50,7 @@ func checkToken() gin.HandlerFunc {
 			ctx.JSON(200, Resp{
 				Code:    403,
 				Message: "",
-				Data:    nil,
+				Data:    -1,
 				Success: false,
 				Error:   "",
 			})
@@ -64,6 +68,14 @@ func userLogin() gin.HandlerFunc {
 		_ = ctx.BindJSON(u)
 		config := conf.GetConfig()
 		if u.Account == config.Web.Account && u.Password == config.Web.Password {
+			ctx.JSON(200, Resp{
+				Code:    200,
+				Message: "登录成功，尊贵的管理员用户",
+				Data:    utils.StrMd5(u.Account + u.Password),
+				Success: true,
+				Error:   "",
+			})
+		} else if checkCommonUser(utils.StrMd5(u.Account + u.Password)) {
 			ctx.JSON(200, Resp{
 				Code:    200,
 				Message: "登录成功",
@@ -125,9 +137,7 @@ func addUser() gin.HandlerFunc {
 			})
 			return
 		}
-		registerID, _ := ctx.GetQuery("register_id")
-		log.Infoln("the jpush register id is " + registerID)
-		_, err = lib.GetToken(p.Code, p.State, registerID)
+		_, err = lib.GetToken(p.Code, p.State, ctx.GetString("token"))
 		if err != nil {
 			ctx.JSON(403, Resp{
 				Code:    403,
@@ -148,6 +158,58 @@ func addUser() gin.HandlerFunc {
 	}
 }
 
+func getExpiredUser() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		failUser, err := model.QueryFailUser()
+		if err != nil {
+			nilArray := make([]interface{}, 0)
+			if err == sql.ErrNoRows {
+				ctx.JSON(200, Resp{
+					Code:    200,
+					Message: "",
+					Data:    nilArray,
+					Success: true,
+					Error:   "",
+				})
+			} else {
+				ctx.JSON(502, Resp{
+					Code:    502,
+					Message: "",
+					Data:    nilArray,
+					Success: false,
+					Error:   err.Error(),
+				})
+			}
+			return
+		}
+		level := ctx.GetInt("level")
+		if level == 1 {
+			ctx.JSON(200, Resp{
+				Code:    200,
+				Message: "",
+				Data:    failUser,
+				Success: true,
+				Error:   "",
+			})
+		} else {
+			var myFaileUser []*model.User
+			for _, user := range failUser {
+				if user.Token == ctx.GetString("token") {
+					myFaileUser = append(myFaileUser, user)
+				}
+			}
+			ctx.JSON(200, Resp{
+				Code:    200,
+				Message: "",
+				Data:    myFaileUser,
+				Success: true,
+				Error:   "",
+			})
+		}
+
+	}
+}
+
 func getUsers() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		users, err := model.Query()
@@ -164,20 +226,32 @@ func getUsers() gin.HandlerFunc {
 			})
 			return
 		}
+		level := ctx.GetInt("level")
+		if level != 1 {
+			users, err = model.QueryByPushID(ctx.GetString("token"))
+			if err != nil {
+				return
+			}
+			if users == nil {
+				ctx.JSON(200, Resp{
+					Code:    200,
+					Message: "查询成功",
+					Data:    []interface{}{},
+					Success: true,
+					Error:   "",
+				})
+				return
+			}
+		}
 
 		var datas []map[string]interface{}
 		for _, user := range users {
-			var isStudy = false
-			_, ok := state.Load(user.UID)
-			if ok {
-				isStudy = true
-			}
 			datas = append(datas, map[string]interface{}{
 				"nick":       user.Nick,
-				"uid":        user.UID,
+				"uid":        user.Uid,
 				"token":      user.Token,
 				"login_time": user.LoginTime,
-				"is_study":   isStudy,
+				"is_study":   state.IsStudy(user.Uid),
 			})
 		}
 		ctx.JSON(200, Resp{
@@ -230,11 +304,10 @@ func study() gin.HandlerFunc {
 		user := model.Find(uid)
 		core := &lib.Core{
 			ShowBrowser: conf.GetConfig().ShowBrowser,
-			Push: func(kind, message string) {
-			},
+			Push:        push.GetPush(conf.GetConfig()),
 		}
 		core.Init()
-		state.Store(uid, core)
+		state.Add(user.Uid, core)
 		config := conf.GetConfig()
 		go func() {
 			core.LearnArticle(user)
@@ -245,12 +318,6 @@ func study() gin.HandlerFunc {
 				core.RespondDaily(user, "daily")
 				core.RespondDaily(user, "weekly")
 				core.RespondDaily(user, "special")
-			}
-			score, _ := lib.GetUserScore(user.ToCookies())
-			content := lib.FormatScore(score)
-			err := push.PushMessage(user.Nick+"学习情况", content, "score", user.PushId)
-			if err != nil {
-				log.Errorln(err.Error())
 			}
 			state.Delete(uid)
 		}()
@@ -267,11 +334,7 @@ func study() gin.HandlerFunc {
 func stopStudy() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		uid := ctx.Query("uid")
-		value, ok := state.Load(uid)
-		if !ok {
-			return
-		}
-		core := value.(*lib.Core)
+		core := state.Get(uid)
 		core.Quit()
 		ctx.JSON(200, Resp{
 			Code:    200,
@@ -291,13 +354,20 @@ func getLog() gin.HandlerFunc {
 
 func sign() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		response, err := http.Get("https://pc-api.xuexi.cn/open/api/sns/sign") //nolint:bodyclose
+		response, err := utils.GetClient().R().Get("https://pc-api.xuexi.cn/open/api/sns/sign")
 		if err != nil {
+			ctx.JSON(403, Resp{
+				Code:    403,
+				Message: "",
+				Data:    nil,
+				Success: false,
+				Error:   err.Error(),
+			})
 			return
 		}
-
+		data := response.Bytes()
+		log.Debugln("访问sign结果返回内容为 ==》 " + string(data))
 		ctx.Writer.WriteHeader(200)
-		data, _ := io.ReadAll(response.Body)
 		ctx.Writer.Write(data)
 	}
 }
@@ -321,6 +391,17 @@ func generate() gin.HandlerFunc {
 func deleteUser() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		uid := ctx.Query("uid")
+		level := ctx.GetInt("level")
+		if level != 1 {
+			ctx.JSON(200, Resp{
+				Code:    401,
+				Message: "你没有权限删除用户！",
+				Data:    "",
+				Success: false,
+				Error:   "你没有权限删除用户！",
+			})
+			return
+		}
 		err := model.DeleteUser(uid)
 		if err != nil {
 			ctx.JSON(200, Resp{
